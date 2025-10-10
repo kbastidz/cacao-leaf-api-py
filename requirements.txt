@@ -1,6 +1,6 @@
-fastapi==0.104.1
-uvicorn[standard]==0.24.0
-python-multipart==0.0.6
-opencv-python-headless==4.8.1.78
-Pillow==10.1.0
-numpy==1.26.2
+fastapi==0.115.0
+uvicorn[standard]==0.32.0
+python-multipart==0.0.12
+opencv-python-headless==4.10.0.84
+Pillow==10.4.0
+numpy==1.26.4
