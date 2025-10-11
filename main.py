@@ -75,8 +75,8 @@ def analizar_hoja(image_bytes, debug=False):
         # Probabilidad simulada
         probabilidad = round(random.uniform(0.85, 0.97), 2)
 
-        # === NUEVA LÓGICA DE DECISIÓN (ajustada) ===
-        if spot_area > 0.06 and texture_score > 0.2:
+        # === NUEVA LÓGICA DE DECISIÓN (más sensible) ===
+        if spot_area > 0.035 or texture_score > 0.18:
             color_principal = "verde amarillento"
             estado_general = "Hongo foliar"
             posible_enfermedad = "Posible Cercospora o Phytophthora"
@@ -97,13 +97,13 @@ def analizar_hoja(image_bytes, debug=False):
             estado_general = "Desconocido"
             posible_enfermedad = "Requiere análisis avanzado"
 
-        # Características detectadas
+        # === Características detectadas (ajustadas) ===
         caracteristicas = {
             "color_principal": color_principal,
-            "manchas": "circulares, marrones" if spot_area > 0.06 else "ninguna visible",
-            "borde": "irregular" if texture_score > 0.2 else "regular",
+            "manchas": "circulares, marrones" if spot_area > 0.035 else "ninguna visible",
+            "borde": "irregular" if texture_score > 0.18 else "regular",
             "textura": "seca" if v < 80 else "normal",
-            "deformaciones": bool(texture_score > 0.3)
+            "deformaciones": bool(texture_score > 0.25)
         }
 
         # Resultado final
@@ -130,6 +130,7 @@ def analizar_hoja(image_bytes, debug=False):
         logger.error(f"Error en analizar_hoja: {str(e)}")
         logger.error(traceback.format_exc())
         raise
+
 
 
 @app.get("/")
