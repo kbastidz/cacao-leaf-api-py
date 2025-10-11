@@ -76,7 +76,7 @@ def analizar_hoja(image_bytes, debug=False):
         probabilidad = round(random.uniform(0.85, 0.97), 2)
 
         # === NUEVA LÓGICA DE DECISIÓN (ajustada) ===
-        if spot_area > 0.03:
+        if spot_area > 0.06 and texture_score > 0.2:
             color_principal = "verde amarillento"
             estado_general = "Hongo foliar"
             posible_enfermedad = "Posible Cercospora o Phytophthora"
@@ -100,8 +100,8 @@ def analizar_hoja(image_bytes, debug=False):
         # Características detectadas
         caracteristicas = {
             "color_principal": color_principal,
-            "manchas": "circulares, marrones" if spot_area > 0.03 else "ninguna visible",
-            "borde": "irregular" if texture_score > 0.25 else "regular",
+            "manchas": "circulares, marrones" if spot_area > 0.06 else "ninguna visible",
+            "borde": "irregular" if texture_score > 0.2 else "regular",
             "textura": "seca" if v < 80 else "normal",
             "deformaciones": bool(texture_score > 0.3)
         }
