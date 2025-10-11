@@ -75,11 +75,15 @@ def analizar_hoja(image_bytes, debug=False):
         # Probabilidad simulada
         probabilidad = round(random.uniform(0.85, 0.97), 2)
 
-        # === NUEVA LÓGICA DE DECISIÓN (más sensible) ===
-        if spot_area > 0.035 or texture_score > 0.18:
+        # === NUEVA LÓGICA DE DECISIÓN (balanceada) ===
+        if spot_area > 0.045 and texture_score > 0.20:
             color_principal = "verde amarillento"
             estado_general = "Hongo foliar"
             posible_enfermedad = "Posible Cercospora o Phytophthora"
+        elif spot_area > 0.03 and texture_score > 0.15:
+            color_principal = "verde amarillento"
+            estado_general = "Posible inicio de hongo"
+            posible_enfermedad = "Etapa temprana de infección fúngica"
         elif r > g and r > b:
             color_principal = "amarillento"
             estado_general = "Deficiencia nutricional"
@@ -88,7 +92,7 @@ def analizar_hoja(image_bytes, debug=False):
             color_principal = "verde oscuro"
             estado_general = "Daño físico o plaga"
             posible_enfermedad = "Posible ataque de insectos"
-        elif g > r and g > b:
+        elif g >= r and g >= b:
             color_principal = "verde"
             estado_general = "Sana"
             posible_enfermedad = "Ninguna"
@@ -96,15 +100,16 @@ def analizar_hoja(image_bytes, debug=False):
             color_principal = "indeterminado"
             estado_general = "Desconocido"
             posible_enfermedad = "Requiere análisis avanzado"
-
+        
         # === Características detectadas (ajustadas) ===
         caracteristicas = {
             "color_principal": color_principal,
-            "manchas": "circulares, marrones" if spot_area > 0.035 else "ninguna visible",
-            "borde": "irregular" if texture_score > 0.18 else "regular",
+            "manchas": "circulares, marrones" if spot_area > 0.045 else "ninguna visible",
+            "borde": "irregular" if texture_score > 0.20 else "regular",
             "textura": "seca" if v < 80 else "normal",
             "deformaciones": bool(texture_score > 0.25)
         }
+
 
         # Resultado final
         resultado = {
