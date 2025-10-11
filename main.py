@@ -5,7 +5,6 @@ import cv2
 import numpy as np
 from PIL import Image, UnidentifiedImageError
 import io
-import random
 import traceback
 import logging
 
@@ -13,7 +12,7 @@ import logging
 app = FastAPI(
     title="Cacao Leaf Analyzer API",
     description="API para analizar hojas de cacao y detectar enfermedades",
-    version="2.1"
+    version="3.0"
 )
 
 # Habilitar CORS
@@ -53,13 +52,13 @@ def analizar_hoja(image_bytes, debug=False):
 
         # Color promedio
         mean_color = cv2.mean(img_blur)[:3]
-        r, g, b = mean_color
-        logger.info(f"Color promedio - R:{r:.2f}, G:{g:.2f}, B:{b:.2f}")
+        b_mean, g_mean, r_mean = mean_color
+        logger.info(f"Color promedio - R:{r_mean:.2f}, G:{g_mean:.2f}, B:{b_mean:.2f}")
 
         # Conversión a HSV
         hsv = cv2.cvtColor(img_blur, cv2.COLOR_BGR2HSV)
-        h, s, v, _ = cv2.mean(hsv)
-        logger.info(f"HSV promedio - H:{h:.2f}, S:{s:.2f}, V:{v:.2f}")
+        h_mean, s_mean, v_mean, _ = cv2.mean(hsv)
+        logger.info(f"HSV promedio - H:{h_mean:.2f}, S:{s_mean:.2f}, V:{v_mean:.2f}")
 
         # Análisis de textura
         gray = cv2.cvtColor(img_blur, cv2.COLOR_BGR2GRAY)
@@ -67,61 +66,114 @@ def analizar_hoja(image_bytes, debug=False):
         texture_score = np.mean(edges) / 255
         logger.info(f"Texture score: {texture_score:.4f}")
 
-        # Detección de manchas
-        mask_spots = cv2.inRange(hsv, (0, 30, 0), (180, 255, 80))
-        spot_area = np.sum(mask_spots > 0) / mask_spots.size
-        logger.info(f"Spot area: {spot_area:.4f}")
+        # === DETECCIÓN MEJORADA DE MANCHAS ===
+        # Detectar manchas marrones/oscuras (hongos/necrosis)
+        # Rango HSV para marrones: H en 10-25, S moderado-alto, V bajo-medio
+        mask_brown_spots = cv2.inRange(hsv, (5, 40, 20), (25, 255, 120))
+        brown_spot_area = np.sum(mask_brown_spots > 0) / mask_brown_spots.size
+        
+        # Detectar manchas muy oscuras (necrosis severa)
+        mask_dark_spots = cv2.inRange(hsv, (0, 0, 0), (180, 255, 50))
+        dark_spot_area = np.sum(mask_dark_spots > 0) / mask_dark_spots.size
+        
+        # Detectar áreas amarillas (clorosis/deficiencias)
+        mask_yellow = cv2.inRange(hsv, (20, 40, 100), (35, 255, 255))
+        yellow_area = np.sum(mask_yellow > 0) / mask_yellow.size
+        
+        logger.info(f"Brown spots: {brown_spot_area:.4f}, Dark spots: {dark_spot_area:.4f}, Yellow: {yellow_area:.4f}")
 
-        # Probabilidad simulada
-        probabilidad = round(random.uniform(0.85, 0.97), 2)
+        # === ANÁLISIS DE SALUD DE LA HOJA ===
+        # Verde saludable: H entre 35-85, S > 30, V > 60
+        mask_healthy_green = cv2.inRange(hsv, (35, 30, 60), (85, 255, 255))
+        healthy_green_ratio = np.sum(mask_healthy_green > 0) / mask_healthy_green.size
+        logger.info(f"Verde saludable: {healthy_green_ratio:.4f}")
 
-        # === NUEVA LÓGICA DE DECISIÓN AJUSTADA ===
-        # Detección fuerte de enfermedad por hongos
-        if spot_area > 0.045 and texture_score > 0.18:
-            color_principal = "verde amarillento"
-            estado_general = "Hongo foliar"
-            posible_enfermedad = "Posible Cercospora o Phytophthora"
+        # Cálculo de saturación promedio (indica vitalidad)
+        saturation_avg = s_mean / 255
         
-        # Detección intermedia (manchas leves o textura irregular)
-        elif spot_area > 0.03 or texture_score > 0.22:
-            color_principal = "verde amarillento"
-            estado_general = "Posible infección o daño físico"
-            posible_enfermedad = "Etapa temprana de infección o ataque de insectos"
+        # === MÉTRICAS DE DECISIÓN ===
+        total_damage = brown_spot_area + dark_spot_area + yellow_area
         
-        # Daños físicos sin manchas oscuras (por textura)
-        elif texture_score > 0.25:
-            color_principal = "verde oscuro"
-            estado_general = "Daño físico o plaga"
-            posible_enfermedad = "Posible ataque de insectos"
+        # Inicializar valores
+        estado_general = ""
+        posible_enfermedad = ""
+        color_principal = ""
+        confianza = 0.0
         
-        # Deficiencia nutricional (color amarillento dominante)
-        elif r > g and r > b:
-            color_principal = "amarillento"
-            estado_general = "Deficiencia nutricional"
-            posible_enfermedad = "Posible falta de nitrógeno"
+        # === LÓGICA DE DECISIÓN MEJORADA ===
         
-        # Si no hay indicios claros, se considera sana
-        elif g >= r and g >= b and spot_area < 0.03:
-            color_principal = "verde"
+        # 1. HOJA SANA
+        if (healthy_green_ratio > 0.65 and 
+            brown_spot_area < 0.08 and 
+            dark_spot_area < 0.05 and 
+            yellow_area < 0.15 and
+            saturation_avg > 0.25):
+            
             estado_general = "Sana"
             posible_enfermedad = "Ninguna"
+            color_principal = "verde"
+            confianza = min(0.95, 0.70 + (healthy_green_ratio * 0.25))
         
-        # Casos no definidos
+        # 2. MANCHAS OSCURAS/MARRONES SIGNIFICATIVAS (Hongos)
+        elif brown_spot_area > 0.12 or dark_spot_area > 0.10:
+            estado_general = "Enfermedad fúngica"
+            posible_enfermedad = "Posible Moniliasis, Phytophthora o Antracnosis"
+            color_principal = "verde con manchas marrones"
+            confianza = min(0.92, 0.65 + (total_damage * 1.5))
+        
+        # 3. MANCHAS MODERADAS
+        elif brown_spot_area > 0.08 or dark_spot_area > 0.06:
+            estado_general = "Posible infección fúngica inicial"
+            posible_enfermedad = "Etapa temprana de hongo foliar o Cercospora"
+            color_principal = "verde con manchas leves"
+            confianza = 0.70 + (brown_spot_area * 2)
+        
+        # 4. ALTA PRESENCIA DE AMARILLO (Deficiencia nutricional)
+        elif yellow_area > 0.25:
+            estado_general = "Deficiencia nutricional"
+            posible_enfermedad = "Posible falta de nitrógeno o magnesio"
+            color_principal = "amarillento"
+            confianza = 0.75 + (yellow_area * 0.6)
+        
+        # 5. TEXTURA IRREGULAR (Daño físico o plagas)
+        elif texture_score > 0.30:
+            estado_general = "Daño físico o plaga"
+            posible_enfermedad = "Posible ataque de insectos masticadores"
+            color_principal = "verde con bordes irregulares"
+            confianza = 0.68 + (texture_score * 0.6)
+        
+        # 6. BAJA SATURACIÓN (Estrés o senescencia)
+        elif saturation_avg < 0.20 and v_mean < 100:
+            estado_general = "Estrés o envejecimiento"
+            posible_enfermedad = "Senescencia natural o estrés hídrico"
+            color_principal = "verde pálido"
+            confianza = 0.70
+        
+        # 7. CASOS INTERMEDIOS (ligeros indicios)
+        elif total_damage > 0.10 or healthy_green_ratio < 0.50:
+            estado_general = "Posible estrés leve"
+            posible_enfermedad = "Monitorear evolución - síntomas no concluyentes"
+            color_principal = "verde variable"
+            confianza = 0.60 + (total_damage * 0.8)
+        
+        # 8. DEFAULT - SANA
         else:
-            color_principal = "indeterminado"
-            estado_general = "Desconocido"
-            posible_enfermedad = "Requiere análisis avanzado"
+            estado_general = "Sana"
+            posible_enfermedad = "Ninguna"
+            color_principal = "verde"
+            confianza = 0.85
         
+        # Limitar confianza entre 0.50 y 0.98
+        probabilidad = round(min(0.98, max(0.50, confianza)), 2)
         
-        # === Características detectadas (mejor calibradas) ===
+        # === CARACTERÍSTICAS DETECTADAS ===
         caracteristicas = {
             "color_principal": color_principal,
-            "manchas": "circulares, marrones" if spot_area > 0.03 else "ninguna visible",
-            "borde": "irregular" if texture_score > 0.20 else "regular",
-            "textura": "seca" if v < 80 else "normal",
-            "deformaciones": bool(texture_score > 0.25)
+            "manchas": "circulares marrones" if brown_spot_area > 0.08 else "no significativas",
+            "borde": "irregular" if texture_score > 0.25 else "regular",
+            "textura": "seca/necrótica" if v_mean < 80 else "normal",
+            "deformaciones": bool(texture_score > 0.30)
         }
-
 
         # Resultado final
         resultado = {
@@ -134,13 +186,17 @@ def analizar_hoja(image_bytes, debug=False):
         # Modo debug opcional
         if debug:
             resultado["debug"] = {
-                "mean_rgb": {"r": round(r, 2), "g": round(g, 2), "b": round(b, 2)},
-                "spot_area": round(spot_area, 4),
+                "mean_rgb": {"r": round(r_mean, 2), "g": round(g_mean, 2), "b": round(b_mean, 2)},
+                "brown_spot_area": round(brown_spot_area, 4),
+                "dark_spot_area": round(dark_spot_area, 4),
+                "yellow_area": round(yellow_area, 4),
+                "healthy_green_ratio": round(healthy_green_ratio, 4),
                 "texture_score": round(texture_score, 4),
-                "hsv_mean": {"h": round(h, 2), "s": round(s, 2), "v": round(v, 2)}
+                "saturation_avg": round(saturation_avg, 4),
+                "hsv_mean": {"h": round(h_mean, 2), "s": round(s_mean, 2), "v": round(v_mean, 2)}
             }
 
-        logger.info(f"Análisis completado: {estado_general}")
+        logger.info(f"Análisis completado: {estado_general} (conf: {probabilidad})")
         return resultado
 
     except Exception as e:
@@ -149,15 +205,14 @@ def analizar_hoja(image_bytes, debug=False):
         raise
 
 
-
 @app.get("/")
 async def root():
     return {
         "message": "API de Análisis de Hojas de Cacao",
         "status": "activa",
-        "version": "2.1",
+        "version": "3.0",
         "endpoints": {
-            "POST /analizar-hoja": "Analiza una imagen de hoja de cacao",
+            "POST /analizar-hoja": "Analiza una imagen de hoja de cacao (agregar ?debug=true para métricas)",
             "GET /": "Información de la API",
             "GET /health": "Health check"
         }
@@ -202,7 +257,7 @@ async def analizar_hoja_endpoint(file: UploadFile = File(...), debug: bool = Fal
 
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy", "service": "cacao-api", "version": "2.1"}
+    return {"status": "healthy", "service": "cacao-api", "version": "3.0"}
 
 
 @app.options("/analizar-hoja")
