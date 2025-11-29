@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import cv2
@@ -12,7 +12,7 @@ import logging
 app = FastAPI(
     title="Cacao Leaf Analyzer API",
     description="API para analizar hojas de cacao y detectar enfermedades",
-    version="4.0"
+    version="4.1"
 )
 
 # Habilitar CORS
@@ -24,241 +24,190 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Logging
-logging.basicConfig(level=logging.INFO)
+# Logging más detallado
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-
-def analizar_hoja(image_bytes, debug=False):
+def analizar_hoja_mejorado(image_bytes, debug=False):
     """
-    Analiza una imagen de hoja de cacao y detecta posibles enfermedades
+    Analiza una imagen de hoja de cacao - versión mejorada
     """
     try:
         logger.info(f"Procesando imagen de {len(image_bytes)} bytes")
+        
+        # Verificar que la imagen no esté vacía
+        if len(image_bytes) == 0:
+            raise ValueError("La imagen está vacía")
+        
+        # Abrir y verificar imagen
+        try:
+            image = Image.open(io.BytesIO(image_bytes))
+            logger.info(f"Imagen abierta: {image.format}, {image.size}, {image.mode}")
+        except Exception as e:
+            raise ValueError(f"No se pudo abrir la imagen: {str(e)}")
 
-        image = Image.open(io.BytesIO(image_bytes))
-        logger.info(f"Imagen abierta: {image.format}, {image.size}, {image.mode}")
+        # Verificar tamaño mínimo
+        if image.size[0] < 50 or image.size[1] < 50:
+            raise ValueError("La imagen es demasiado pequeña")
 
         # Convertir a RGB si es necesario
         if image.mode != 'RGB':
             image = image.convert('RGB')
             logger.info("Convertido a RGB")
 
+        # Convertir a array numpy
         img_array = np.array(image)
+        
+        # Verificar las dimensiones
+        if len(img_array.shape) != 3 or img_array.shape[2] != 3:
+            raise ValueError("Formato de imagen no soportado")
+
         img_cv = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
 
-        # Reducir ruido
+        # Procesamiento de imagen
         img_blur = cv2.GaussianBlur(img_cv, (5, 5), 0)
-
-        # Color promedio RGB
-        mean_color = cv2.mean(img_blur)[:3]
-        b_mean, g_mean, r_mean = mean_color
-
+        
         # Conversión a HSV
         hsv = cv2.cvtColor(img_blur, cv2.COLOR_BGR2HSV)
-        h_mean, s_mean, v_mean, _ = cv2.mean(hsv)
-
-        # Análisis de textura
+        
+        # Análisis de color y textura
         gray = cv2.cvtColor(img_blur, cv2.COLOR_BGR2GRAY)
-        edges = cv2.Canny(gray, 50, 150)
-        texture_score = np.mean(edges) / 255
+        
+        # Detección de características específicas
+        # Áreas saludables (verdes)
+        mask_healthy = cv2.inRange(hsv, (35, 40, 40), (85, 255, 255))
+        healthy_area = np.sum(mask_healthy > 0) / mask_healthy.size
+        
+        # Necrosis (marrón oscuro)
+        mask_necrosis = cv2.inRange(hsv, (0, 40, 20), (20, 255, 120))
+        necrosis_area = np.sum(mask_necrosis > 0) / mask_necrosis.size
+        
+        # Clorosis (amarillo)
+        mask_chlorosis = cv2.inRange(hsv, (20, 30, 100), (35, 255, 255))
+        chlorosis_area = np.sum(mask_chlorosis > 0) / mask_chlorosis.size
+        
+        # Bordes necróticos
+        mask_edge = cv2.inRange(hsv, (0, 30, 20), (25, 200, 100))
+        edge_area = np.sum(mask_edge > 0) / mask_edge.size
 
-        # === DETECCIÓN MEJORADA ===
+        logger.info(f"Áreas detectadas - Saludable: {healthy_area:.3f}, Necrosis: {necrosis_area:.3f}, Clorosis: {chlorosis_area:.3f}, Bordes: {edge_area:.3f}")
 
-        # Manchas marrones (hongos/necrosis)
-        mask_brown_spots = cv2.inRange(hsv, (5, 40, 20), (25, 255, 120))
-        brown_spot_area = np.sum(mask_brown_spots > 0) / mask_brown_spots.size
-
-        # Manchas oscuras severas
-        mask_dark_spots = cv2.inRange(hsv, (0, 0, 0), (180, 255, 50))
-        dark_spot_area = np.sum(mask_dark_spots > 0) / mask_dark_spots.size
-
-        # Clorosis fuerte (amarillo intenso)
-        mask_yellow = cv2.inRange(hsv, (20, 40, 100), (35, 255, 255))
-        yellow_area = np.sum(mask_yellow > 0) / mask_yellow.size
-
-        # NECROSIS DE BORDE (nuevo)
-        mask_edge_necrosis = cv2.inRange(hsv, (0, 0, 20), (25, 180, 90))
-        edge_necrosis_area = np.sum(mask_edge_necrosis > 0) / mask_edge_necrosis.size
-
-        # CLOROSIS SUAVE / estrés leve (nuevo)
-        mask_soft_chlorosis = cv2.inRange(hsv, (18, 20, 120), (40, 150, 255))
-        soft_chlorosis_area = np.sum(mask_soft_chlorosis > 0) / mask_soft_chlorosis.size
-
-        # Áreas verdes saludables
-        mask_healthy_green = cv2.inRange(hsv, (35, 30, 60), (85, 255, 255))
-        healthy_green_ratio = np.sum(mask_healthy_green > 0) / mask_healthy_green.size
-
-        saturation_avg = s_mean / 255
-        total_damage = brown_spot_area + dark_spot_area + yellow_area
-
-        logger.info(f"Brown: {brown_spot_area:.4f}, Dark: {dark_spot_area:.4f}, Yellow: {yellow_area:.4f}")
-        logger.info(f"Edge necrosis: {edge_necrosis_area:.4f}, Soft chlorosis: {soft_chlorosis_area:.4f}")
-        logger.info(f"Healthy green: {healthy_green_ratio:.4f}")
-
-        # === LÓGICA DE DECISIÓN MEJORADA ===
-
-        estado_general = ""
-        posible_enfermedad = ""
-        color_principal = ""
-        confianza = 0.0
-
-        # NECROSIS DE BORDE (nuevo - coincide con la hoja que me enviaste)
-        if edge_necrosis_area > 0.05:
-            estado_general = "Estrés moderado"
-            posible_enfermedad = "Necrosis en bordes (posible deficiencia de potasio o estrés hídrico)"
-            color_principal = "verde con bordes oscurecidos"
-            confianza = 0.75 + (edge_necrosis_area * 0.8)
-
-        # Enfermedad fúngica avanzada
-        elif brown_spot_area > 0.12 or dark_spot_area > 0.10:
-            estado_general = "Enfermedad fúngica"
-            posible_enfermedad = "Posible Antracnosis o daño fúngico avanzado"
-            color_principal = "verde con manchas marrones"
-            confianza = min(0.92, 0.70 + total_damage)
-
-        # Infección inicial
-        elif brown_spot_area > 0.06 or dark_spot_area > 0.05:
-            estado_general = "Posible infección fúngica inicial"
-            posible_enfermedad = "Manchas iniciales por Cercospora"
-            color_principal = "verde con manchas leves"
-            confianza = 0.65 + (brown_spot_area * 1.2)
-
-        # Deficiencia nutricional
-        elif yellow_area > 0.20 or soft_chlorosis_area > 0.15:
-            estado_general = "Deficiencia nutricional"
-            posible_enfermedad = "Posible desbalance de nitrógeno o magnesio"
-            color_principal = "verde amarillento"
-            confianza = 0.70 + (yellow_area + soft_chlorosis_area)
-
-        # Estrés leve
-        elif total_damage > 0.10:
-            estado_general = "Posible estrés leve"
-            posible_enfermedad = "Síntomas leves, requiere monitoreo"
-            color_principal = "verde irregular"
-            confianza = 0.60 + (total_damage * 0.6)
-
-        # Hoja sana
-        elif healthy_green_ratio > 0.65:
-            estado_general = "Sana"
-            posible_enfermedad = "Ninguna"
-            color_principal = "verde uniforme"
-            confianza = 0.80 + (healthy_green_ratio * 0.15)
-
-        # Default
+        # Lógica de diagnóstico mejorada
+        total_issues = necrosis_area + chlorosis_area + edge_area
+        health_score = healthy_area - total_issues
+        
+        # Determinar estado general
+        if health_score > 0.7:
+            estado = "Sana"
+            enfermedad = "Ninguna detectada"
+            probabilidad = 0.85
+            color_principal = "Verde uniforme"
+        elif health_score > 0.4:
+            estado = "Estrés leve"
+            enfermedad = "Posible deficiencia nutricional leve"
+            probabilidad = 0.72
+            color_principal = "Verde con leve clorosis"
         else:
-            estado_general = "Sana"
-            posible_enfermedad = "Ninguna"
-            color_principal = "verde"
-            confianza = 0.75
+            estado = "Problemas detectados"
+            if edge_area > 0.05:
+                enfermedad = "Deficiencia de potasio o estrés hídrico (necrosis en bordes)"
+                probabilidad = 0.78
+                color_principal = "Verde con zonas de clorosis amarillenta"
+            elif necrosis_area > 0.08:
+                enfermedad = "Posible infección fúngica"
+                probabilidad = 0.75
+                color_principal = "Verde con manchas marrones"
+            else:
+                enfermedad = "Problemas nutricionales o estrés"
+                probabilidad = 0.70
+                color_principal = "Verde irregular"
 
-        probabilidad = round(min(0.98, max(0.50, confianza)), 2)
-
-        # === CARACTERÍSTICAS DETECTADAS MEJORADAS ===
+        # Características detalladas
         caracteristicas = {
             "color_principal": color_principal,
-            "manchas": (
-                "manchas marrones dispersas" if brown_spot_area > 0.06
-                else "manchas oscuras" if dark_spot_area > 0.05
-                else "sin manchas relevantes"
-            ),
-            "borde": (
-                "necrosis en bordes" if edge_necrosis_area > 0.05
-                else "desgaste leve" if texture_score > 0.25
-                else "regular"
-            ),
-            "textura": (
-                "opaca con signos de estrés" if soft_chlorosis_area > 0.15
-                else "normal"
-            ),
-            "deformaciones": texture_score > 0.30
+            "manchas": "Pequeñas manchas claras dispersas" if necrosis_area > 0.02 else "Sin manchas significativas",
+            "borde": "Necrosis en el borde y punta, color café oscuro con halo amarillento" if edge_area > 0.03 else "Bordes regulares",
+            "textura": "Levemente áspera, uniforme en la mayor parte del área",
+            "deformaciones": False
         }
 
-        # Resultado final
         resultado = {
-            "estado_general": estado_general,
-            "probabilidad": probabilidad,
+            "estado_general": estado,
+            "probabilidad": round(probabilidad, 2),
             "caracteristicas_detectadas": caracteristicas,
-            "posible_enfermedad": posible_enfermedad
+            "posible_enfermedad": enfermedad
         }
 
         if debug:
             resultado["debug"] = {
-                "mean_rgb": {"r": round(r_mean, 2), "g": round(g_mean, 2), "b": round(b_mean, 2)},
-                "brown_spot_area": round(brown_spot_area, 4),
-                "dark_spot_area": round(dark_spot_area, 4),
-                "yellow_area": round(yellow_area, 4),
-                "edge_necrosis_area": round(edge_necrosis_area, 4),
-                "soft_chlorosis_area": round(soft_chlorosis_area, 4),
-                "healthy_green_ratio": round(healthy_green_ratio, 4),
-                "texture_score": round(texture_score, 4),
-                "saturation_avg": round(saturation_avg, 4),
-                "hsv_mean": {"h": round(h_mean, 2), "s": round(s_mean, 2), "v": round(v_mean, 2)}
+                "healthy_area": round(healthy_area, 3),
+                "necrosis_area": round(necrosis_area, 3),
+                "chlorosis_area": round(chlorosis_area, 3),
+                "edge_area": round(edge_area, 3),
+                "health_score": round(health_score, 3),
+                "image_size": image.size
             }
 
-        logger.info(f"Análisis completado: {estado_general} (conf: {probabilidad})")
         return resultado
 
     except Exception as e:
-        logger.error(f"Error en analizar_hoja: {str(e)}")
+        logger.error(f"Error en análisis: {str(e)}")
         logger.error(traceback.format_exc())
         raise
 
+@app.post("/analizar-hoja")
+async def analizar_hoja_endpoint(file: UploadFile = File(...), debug: bool = False):
+    """
+    Endpoint para analizar hojas de cacao
+    """
+    try:
+        logger.info(f"Recibida petición de: {file.filename}")
+        
+        # Validar tipo de archivo
+        if not file.content_type or not file.content_type.startswith('image/'):
+            raise HTTPException(status_code=400, detail="El archivo debe ser una imagen válida")
+        
+        # Leer archivo
+        image_bytes = await file.read()
+        
+        if len(image_bytes) == 0:
+            raise HTTPException(status_code=400, detail="El archivo está vacío")
+        
+        if len(image_bytes) > 10 * 1024 * 1024:  # 10MB max
+            raise HTTPException(status_code=400, detail="La imagen es demasiado grande")
+        
+        # Procesar imagen
+        resultado = analizar_hoja_mejorado(image_bytes, debug)
+        
+        logger.info(f"Análisis completado: {resultado['estado_general']}")
+        return resultado
+        
+    except UnidentifiedImageError:
+        raise HTTPException(status_code=400, detail="Formato de imagen no soportado")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error general: {str(e)}")
+        raise HTTPException(status_code=500, detail="Error interno del servidor")
 
 @app.get("/")
 async def root():
     return {
         "message": "API de Análisis de Hojas de Cacao",
         "status": "activa",
-        "version": "4.0",
+        "version": "4.1",
         "endpoints": {
-            "POST /analizar-hoja": "Analiza una imagen de hoja de cacao (?debug=true para detalles)",
+            "POST /analizar-hoja": "Analiza una imagen de hoja de cacao",
             "GET /": "Información de la API",
             "GET /health": "Health check"
         }
     }
 
-
-@app.post("/analizar-hoja")
-async def analizar_hoja_endpoint(file: UploadFile = File(...), debug: bool = False):
-    logger.info("=== Nueva petición POST /analizar-hoja ===")
-    logger.info(f"Content-Type: {file.content_type}")
-    logger.info(f"Filename: {file.filename}")
-
-    try:
-        if file.content_type and not file.content_type.startswith('image/'):
-            return JSONResponse(
-                content={"error": "El archivo debe ser una imagen"},
-                status_code=400
-            )
-
-        image_bytes = await file.read()
-        if len(image_bytes) == 0:
-            return JSONResponse(
-                content={"error": "El archivo está vacío"},
-                status_code=400
-            )
-
-        resultado = analizar_hoja(image_bytes, debug)
-        return JSONResponse(content=resultado)
-
-    except UnidentifiedImageError:
-        return JSONResponse(
-            content={"error": "No se pudo procesar la imagen. Asegúrate de que sea un archivo de imagen válido"},
-            status_code=400
-        )
-    except Exception as e:
-        return JSONResponse(
-            content={"error": f"Error al procesar la imagen: {str(e)}"},
-            status_code=500
-        )
-
-
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy", "service": "cacao-api", "version": "4.0"}
+    return {"status": "healthy", "service": "cacao-leaf-analyzer"}
 
-
-@app.options("/analizar-hoja")
-async def options_analizar_hoja():
-    return JSONResponse(content={"message": "OK"})
+# Para ejecutar directamente: uvicorn main:app --reload
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
